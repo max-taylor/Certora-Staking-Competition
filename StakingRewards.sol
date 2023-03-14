@@ -94,6 +94,7 @@ contract StakingRewards {
         }
     }
 
+    // @audit-ok
     function setRewardsDuration(uint _duration) external onlyOwner {
         require(finishAt < block.timestamp, "reward duration not finished");
         duration = _duration;
@@ -102,6 +103,7 @@ contract StakingRewards {
     function notifyRewardAmount(
         uint _amount
     ) external onlyOwner updateReward(address(0)) {
+        // @audit If this isn't checked correctly, the remaining rewards in the else block will be abandoned
         if (block.timestamp >= finishAt) {
             rewardRate = _amount / duration;
         } else {
@@ -119,6 +121,7 @@ contract StakingRewards {
         updatedAt = block.timestamp;
     }
 
+    // @audit There will likely be a bug around this, create some bad implementations and flip them
     function _min(uint x, uint y) private pure returns (uint) {
         return x <= y ? x : y;
     }

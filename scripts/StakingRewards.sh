@@ -12,7 +12,7 @@ certoraRun ./harness/StakingRewardsHarness.sol:StakingRewardsHarness \
 \
 \
 \
---solc solc8.0 \
+--solc solc \
 --send_only \
 --rule_sanity basic \
     $RULE \

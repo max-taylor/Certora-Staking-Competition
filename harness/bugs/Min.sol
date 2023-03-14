@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8;
 
-import "../StakingRewards.sol";
+import "../../StakingRewards.sol";
 
 contract StakingRewardsHarness is StakingRewards {
     constructor(
@@ -9,9 +9,9 @@ contract StakingRewardsHarness is StakingRewards {
         address _rewardToken
     ) StakingRewards(_stakingToken, _rewardToken) {}
 
-    function rewardTransferTest(address user, uint amount) external {
-        rewardsToken.transfer(user, amount);
+    // ! Bug contract flips the min return
+    function _min(uint x, uint y) private pure override returns (uint) {
+        // return x <= y ? x : y;
+        return x <= y ? y : x;
     }
-
-    function updateRewardHelper(address user) external updateReward(user) {}
 }
