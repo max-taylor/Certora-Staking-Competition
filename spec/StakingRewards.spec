@@ -21,9 +21,9 @@ methods{
     _min(uint256, uint256)          returns(uint256)    envfree
     rewardsToken.balanceOf(address) returns (uint256)   envfree
     stakingToken.balanceOf(address) returns (uint256)   envfree
-    lastTimeRewardApplicable()      returns (uint256)   envfree
-    rewardPerToken()                returns (uint256)   envfree
-    earned(address)                 returns uint256     envfree
+    lastTimeRewardApplicable()      returns (uint256)
+    rewardPerToken()                returns (uint256)
+    earned(address)                 returns uint256 
     stake(uint256)
     withdraw(uint256)
     getReward(address)
@@ -65,64 +65,104 @@ invariant finishAtGreaterThanBlocktimestamp(env e)
     }
   }
 
-invariant updatedAtGreaterLessBlocktimestamp(env e)
-  updatedAt() <= e.block.timestamp
+// @audit-ok
+invariant finishAtZeroThenUpdatedAtZero()
+  finishAt() == 0 => updatedAt() == 0
+  {
+    preserved with (env e) {
+      require e.block.timestamp > 0;
+    }
+  }
 
-// invariant updatedAtBlocktimestamp(env e) 
-//   updatedAt() <= e.block.timestamp
+// @audit-ok
+invariant updatedAtLessBlocktimestamp(env e)
+  updatedAt() <= e.block.timestamp
+  {
+    preserved with (env e1) {
+      // Ensures the parametric method uses the same block.timestamp
+      require e1.block.timestamp == e.block.timestamp;
+    }
+  }
 
 // *** Unit test
 
+// @audit-ok
 rule updatedAtShouldOnlyIncrease(method f, env e, calldataarg args) {
+  requireInvariant finishAtGreaterThanBlocktimestamp(e);
+  requireInvariant updatedAtLessBlocktimestamp(e);
+  requireInvariant finishAtZeroThenUpdatedAtZero();
+
   mathint updatedAtBefore = updatedAt();
 
-  // Safe assumption
-  require updatedAtBefore >= e.block.timestamp;
-  require finishAt() >= e.block.timestamp;
-
   f(e, args);
+
   mathint updatedAtAfter = updatedAt();
 
-  assert updatedAtAfter >= updatedAtBefore, "Updated at should only ever increase";
+  assert updatedAtAfter >= updatedAtBefore, "Updated at should only ever increase if finishAt has been set";
 }
 
-rule userRewardsStopIncreasingAfterRewardExpiry(env e) {
-  address user;
-  require user == e.msg.sender;
-
-  mathint earned1 = earned(user);
-
-  // Simplifies rule setup, otherwise would need to require a lot more
-  require earned1 > 0;
+// @audit-ok
+rule userRewardsStopIncreasingAfterRewardExpiry(address user) {
+  env e;
   // Ensure the reward duration has expired
   require e.block.timestamp >= finishAt();
 
-  mathint earned2 = earned(user);
+  // Cache the reward value
+  mathint earned1 = earned(e, user);
+
+  env e1;
+
+  require e1.block.timestamp >= e.block.timestamp;
+  
+  mathint earned2 = earned(e1, user);
 
   assert earned1 == earned2, 
     "User's earned rewards should stop increasing after reward duration expires";
+}
+
+// @audit-ok
+rule rewardPerTokenStopsIncreasingAfterFinish() {
+  env e;
+  
+  require e.block.timestamp >= finishAt();
+
+  mathint rewardPerTokenBefore = rewardPerToken(e);
+
+  env e1;
+  require e1.block.timestamp >= e.block.timestamp;
+
+  mathint rewardPerTokenAfter = rewardPerToken(e1);
+
+  assert rewardPerTokenBefore == rewardPerTokenAfter;
 }
 
 // *** OK
 
 // @audit-ok
 rule onlySpecificConditionsCanModifyRewardDuration(method f, env e){
-    uint256 _duration = duration();
-    calldataarg args;
-    f(e, args);
-    uint256 duration_ = duration();
+  uint256 _duration = duration();
+  calldataarg args;
+  f(e, args);
+  uint256 duration_ = duration();
 
-    assert _duration != duration_ => 
-      (
-        f.selector == setRewardsDuration(uint256).selector && 
-        e.msg.sender == owner() &&
-        finishAt() < e.block.timestamp
-      );
+  assert _duration != duration_ => 
+    (
+      f.selector == setRewardsDuration(uint256).selector && 
+      e.msg.sender == owner() &&
+      finishAt() < e.block.timestamp
+    );
 }
+
+// **** High-level
+
+// rule userShouldAlwaysBeAbleToWithdraw() {
+
+// }
 
 // *** HELPERS
 
 function globalRequires(env e) {
+  require e.msg.sender != 0;
   require e.msg.sender != currentContract;
   require e.msg.sender != rewardsToken;
   require e.msg.sender != stakingToken;
