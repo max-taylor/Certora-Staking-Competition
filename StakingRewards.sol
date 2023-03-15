@@ -28,7 +28,6 @@ contract StakingRewards {
     mapping(address => uint) public balanceOf;
 
     constructor(address _stakingToken, address _rewardToken) {
-        // @audit-ok
         owner = msg.sender;
         stakingToken = IERC20(_stakingToken);
         rewardsToken = IERC20(_rewardToken);
@@ -39,14 +38,11 @@ contract StakingRewards {
         _;
     }
 
-    // @audit-ok
     modifier updateReward(address _account) {
-        // @audit-ok
         rewardPerTokenStored = rewardPerToken();
         updatedAt = lastTimeRewardApplicable();
 
         if (_account != address(0)) {
-            // @audit-ok
             rewards[_account] = earned(_account);
             userRewardPerTokenPaid[_account] = rewardPerTokenStored;
         }
@@ -54,18 +50,15 @@ contract StakingRewards {
         _;
     }
 
-    // @audit-ok
     function lastTimeRewardApplicable() public view returns (uint) {
         return _min(finishAt, block.timestamp);
     }
 
-    // @audit-ok
     function rewardPerToken() public view returns (uint) {
         if (totalSupply == 0) {
             return rewardPerTokenStored;
         }
 
-        // @audit-ok
         return
             rewardPerTokenStored +
             (rewardRate * (lastTimeRewardApplicable() - updatedAt) * 1e18) /
@@ -74,7 +67,6 @@ contract StakingRewards {
 
     function stake(uint _amount) external updateReward(msg.sender) {
         require(_amount > 0, "amount = 0");
-        // @audit-ok
         stakingToken.transferFrom(msg.sender, address(this), _amount);
         balanceOf[msg.sender] += _amount;
         totalSupply += _amount;
@@ -82,14 +74,12 @@ contract StakingRewards {
 
     function withdraw(uint _amount) external updateReward(msg.sender) {
         require(_amount > 0, "amount = 0");
-        // @audit-ok
         balanceOf[msg.sender] -= _amount;
         totalSupply -= _amount;
         stakingToken.transfer(msg.sender, _amount);
     }
 
     function earned(address _account) public view returns (uint) {
-        // @audit-ok
         return
             ((balanceOf[_account] *
                 (rewardPerToken() - userRewardPerTokenPaid[_account])) / 1e18) +
@@ -97,7 +87,6 @@ contract StakingRewards {
     }
 
     function getReward() external updateReward(msg.sender) {
-        // @audit-ok
         uint reward = rewards[msg.sender];
         if (reward > 0) {
             rewards[msg.sender] = 0;
@@ -105,7 +94,6 @@ contract StakingRewards {
         }
     }
 
-    // @audit-ok
     function setRewardsDuration(uint _duration) external onlyOwner {
         require(finishAt < block.timestamp, "reward duration not finished");
         duration = _duration;
@@ -114,7 +102,6 @@ contract StakingRewards {
     function notifyRewardAmount(
         uint _amount
     ) external onlyOwner updateReward(address(0)) {
-        // @audit-ok
         if (block.timestamp >= finishAt) {
             rewardRate = _amount / duration;
         } else {
@@ -122,19 +109,16 @@ contract StakingRewards {
             rewardRate = (_amount + remainingRewards) / duration;
         }
 
-        // @audit-ok
         require(rewardRate > 0, "reward rate = 0");
         require(
             rewardRate * duration <= rewardsToken.balanceOf(address(this)),
             "reward amount > balance"
         );
 
-        // @audit-ok
         finishAt = block.timestamp + duration;
         updatedAt = block.timestamp;
     }
 
-    // @audit-info Good bug contract to test
     function _min(uint x, uint y) private pure returns (uint) {
         return x <= y ? x : y;
     }
