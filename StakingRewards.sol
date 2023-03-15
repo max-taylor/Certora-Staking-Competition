@@ -95,6 +95,11 @@ contract StakingRewards {
             rewards[_account];
     }
 
+    //     uint256 loadme;
+
+    // function getReward() external {
+    //     uint256 loadme2 = loadme;
+
     function getReward() external updateReward(msg.sender) {
         uint reward = rewards[msg.sender];
         if (reward > 0) {
@@ -113,7 +118,6 @@ contract StakingRewards {
     function notifyRewardAmount(
         uint _amount
     ) external onlyOwner updateReward(address(0)) {
-        // @audit rewardRate == 0 if duration is too large
         if (block.timestamp >= finishAt) {
             rewardRate = _amount / duration;
         } else {
