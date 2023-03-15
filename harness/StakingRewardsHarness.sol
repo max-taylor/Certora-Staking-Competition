@@ -27,4 +27,6 @@ contract StakingRewardsHarness is StakingRewards {
             updatedRewardRate = (_amount + remainingRewards) / duration;
         }
     }
+
+    function updateRewardHelper(address user) external updateReward(user) {}
 }

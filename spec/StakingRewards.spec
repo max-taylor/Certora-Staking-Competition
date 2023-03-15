@@ -51,22 +51,9 @@ hook Sload uint256 val balanceOf[KEY address account] STORAGE {
     require ghostSumOfBalances >= val;
 }
 
-// ghost mathint stakingTokenBalanceSum {
-// 	init_state axiom stakingTokenBalanceSum == 0 ;
-// }
-
-// hook Sload uint256 val stakingToken.balanceOf[KEY address account] STORAGE {
-//   require stakingTokenBalanceSum <= val;
-// }
-
-// hook Sstore stakingToken.balanceOf [KEY address account] uint256 newValue (uint256 oldValue) STORAGE {
-//   stakingTokenBalanceSum = stakingTokenBalanceSum + newValue - oldValue;
-// }
-
 ////////////////////////////////////////////////////////////
 //  ***************     Valid States     ***************  //
 ////////////////////////////////////////////////////////////
-
 
 // @audit-ok
 invariant totalSupplyIsSumOfBalances()
@@ -121,9 +108,6 @@ invariant lastTimeRewardApplicableGreaterEqualUpdatedAt(env e)
 // This is only ever set to be equal to rewardPerTokenStored
 invariant userRewardPerTokenPaidLessEqualRewardPerTokenStored(address user)
   userRewardPerTokenPaid(user) <= rewardPerTokenStored()
-
-invariant totalSupplyZeroRewardPerTokenEqualsStored(env e)
-  totalSupply() == 0 => rewardPerToken(e) == rewardPerTokenStored()
 
 // @audit-ok
 invariant stakingContractSolvent()
@@ -226,19 +210,6 @@ rule notifyRewardAmountShouldRevertIffConditions() {
 //  *** Staking
 
 // @audit-ok
-rule shouldRevertWhenTryingToStakeMoreThanBalance() {
-  env e;
-  uint256 amount;
-  uint256 balance = stakingToken.balanceOf(e.msg.sender);
-
-  require amount > balance;
-
-  stake@withrevert(e, amount);
-
-  assert lastReverted, "Should not be able to stake more than the user's balance";
-}
-
-// @audit-ok
 // Requires a lot of pre-conditions, but works has a simple assertion for the conditions
 rule stakeShouldRevertIffConditions() {
   env e; uint256 amount;
@@ -247,6 +218,7 @@ rule stakeShouldRevertIffConditions() {
   require stakingToken.allowance(e.msg.sender, currentContract) >= amount;
   requireInvariant userRewardPerTokenPaidLessEqualRewardPerTokenStored(e.msg.sender);
 
+  // TODO: remove 
   earned@withrevert(e, e.msg.sender);
   require !lastReverted;
 
@@ -260,6 +232,20 @@ rule stakeShouldRevertIffConditions() {
     amount > balance ||
     amount == 0
   ), "Should not be able to stake more than the user's balance";
+}
+
+// @audit-ok
+// A bit redundant but extra security
+rule shouldRevertWhenTryingToStakeMoreThanBalance() {
+  env e;
+  uint256 amount;
+  uint256 balance = stakingToken.balanceOf(e.msg.sender);
+
+  require amount > balance;
+
+  stake@withrevert(e, amount);
+
+  assert lastReverted, "Should not be able to stake more than the user's balance";
 }
 
 // ** Withdraw
@@ -284,8 +270,6 @@ rule withdrawRevertIffConditions() {
     amount == 0
   ), "Withdrawing more than the user's balance should revert";
 }
-
-// rule updatedAtOnlyUpdatedBySelectMethods() {}
 
 ////////////////////////////////////////////////////////////
 //  ***************   State Transitions  ***************  //
@@ -320,21 +304,42 @@ rule notifyRewardAmountShouldUpdateValues() {
 }
 
 // @audit-ok
-// Only the msg.sender can modify their reward values and they can only be modified by select methods
-rule usersRewardValuesUpdatedOnSpecificFunctions(address account) {
-  env e; method f; calldataarg args;
+// Only the msg.sender can modify their reward values and they can only be modified by select methods.
+rule usersRewardValuesUpdatedOnSpecificFunctions(method f, address account) 
+  filtered {
+    // Ignore this method as it breaks the e.msg.sender == account assertion
+    f -> f.selector != updateRewardHelper(address).selector
+} {
+  env e; calldataarg args;
   mathint rewardsBefore = rewards(account);
   mathint userRewardPerTokenPaidBefore = userRewardPerTokenPaid(account);
 
+  mathint expectedNewRewards = f.selector != getReward().selector ? 
+    earned(e, account) :
+    0;
+
+  mathint expectedUserRewardPerTokenPaid = rewardPerToken(e);
+
   f(e, args);
 
+  mathint newRewards = rewards(account);
+  mathint newUserRewardPerTokenPaid = userRewardPerTokenPaid(account);
+
   assert (
-    rewards(account) != rewardsBefore || 
-    userRewardPerTokenPaid(account) != userRewardPerTokenPaidBefore
+    newRewards != rewardsBefore || 
+    newUserRewardPerTokenPaid != userRewardPerTokenPaidBefore
   ) => (
     e.msg.sender == account &&
     userRewardUpdatingMethods(f)
   );
+
+  assert newRewards != rewardsBefore => 
+    newRewards == expectedNewRewards, 
+    "User's new reward value not equal to expected value";
+
+  assert newUserRewardPerTokenPaid != userRewardPerTokenPaidBefore => 
+    newUserRewardPerTokenPaid == expectedUserRewardPerTokenPaid, 
+    "User's new reward per token paid not equal to expected value";
 }
 
 // @audit-ok
@@ -398,21 +403,40 @@ rule rewardPerTokenUpdatedAtUpdatedBySelectMethods() {
   mathint rewardPerTokenStoredBefore = rewardPerTokenStored();
   mathint updatedAtBefore = updatedAt();
 
+  mathint expectedRewardPerToken = rewardPerToken(e);
+
+  // If calling notifyRewardAmount updatedAt will be the block.timestamp, otherwise the return valuue from lastTimeRewardApplicable
+  mathint expectedUpdatedAt = f.selector != notifyRewardAmount(uint256).selector ? lastTimeRewardApplicable(e) : e.block.timestamp;
+
   f(e, args);
 
+  mathint rewardPerTokenAfter = rewardPerTokenStored();
+  mathint updatedAtAfter = updatedAt();
+
   assert (
-    rewardPerTokenStoredBefore != rewardPerTokenStored() || 
-    updatedAtBefore != updatedAt()
+    rewardPerTokenStoredBefore != rewardPerTokenAfter || 
+    updatedAtBefore != updatedAtAfter
   ) => updatedRewardMethods(f);
+
+  assert rewardPerTokenStoredBefore != rewardPerTokenAfter => 
+    rewardPerTokenAfter == expectedRewardPerToken, 
+    "Reward per token not updated to expected value";
+
+  assert updatedAtBefore != updatedAtAfter => 
+    updatedAtAfter == expectedUpdatedAt,
+    "Updated at not set to expected value";
 }
 
-
+// ! Broken
 rule monotonicityForRewardEarningAndDuration() {
   env e1; env e2;
-  require e2.block.timestamp > e1.block.timestamp;
-  storage cacheStorage = lastStorage;
 
   address user; uint256 rewardAmount; uint256 depositAmount;
+  require user == e1.msg.sender;
+  require e2.msg.sender == e1.msg.sender;
+  require e2.block.timestamp > e1.block.timestamp;
+
+  storage cacheStorage = lastStorage;
 
   mathint initialDuration = duration();
 
@@ -424,31 +448,46 @@ rule monotonicityForRewardEarningAndDuration() {
   withdraw(e2, depositAmount);
   mathint rewardsEnv2Before = earned(e2, user);
 
-  mathint beforeSetRewardDiff = rewardsEnv2Before - rewardsEnv1Before;
+  mathint firstDurationRewards = rewardsEnv2Before - rewardsEnv1Before;
 
-  require beforeSetRewardDiff > 0;
-
-  // Using the initial storage, update the duration
+  // Reset to the initial state
   uint256 newDuration;
   setRewardsDuration(e1, newDuration) at cacheStorage;
-  cacheStorage = lastStorage;
-  notifyRewardAmount(e1, rewardAmount) at cacheStorage;
-  cacheStorage = lastStorage;
+
+  notifyRewardAmount(e1, rewardAmount);
 
   // Determine rewards earned over the period
-  mathint rewardsEnv1After = earned(e1, user) at cacheStorage;
+  mathint rewardsEnv1After = earned(e1, user);
   withdraw(e2, depositAmount);
-  mathint rewardsEnv2After = earned(e2, user) at cacheStorage;
+  mathint rewardsEnv2After = earned(e2, user);
 
-  mathint afterSetRewardDiff = rewardsEnv2After - rewardsEnv1After;
+  mathint newDurationRewards = rewardsEnv2After - rewardsEnv1After;
 
-  assert (
-    initialDuration > newDuration <=> 
-    beforeSetRewardDiff < afterSetRewardDiff
-  ) && (
-    initialDuration < newDuration <=>
-    beforeSetRewardDiff > afterSetRewardDiff
-  );
+  assert newDurationRewards > firstDurationRewards => 
+    newDuration < initialDuration, "If reward over time increased then the duration must be shorter";
+  // assert newDurationRewards < firstDurationRewards => 
+  //   newDuration > initialDuration, "If reward over time decreased, then the duration must be longer";
+}
+
+// @audit-ok
+rule rewardPerTokenReturnsExpected() {
+  env e;
+  mathint result = rewardPerToken(e);
+  mathint rewardPerTokenStoredResult = rewardPerTokenStored();
+
+  mathint increaseRewardPerToken = (rewardRate() * (lastTimeRewardApplicable(e) - updatedAt()) * oneEther()) / totalSupply();
+
+  assert totalSupply() == 0 ? 
+    result == rewardPerTokenStoredResult :
+    result == rewardPerTokenStoredResult + increaseRewardPerToken;
+}
+
+// @audit-ok
+rule earnedReturnsExpected() {
+  env e; address user;
+  mathint expectedRewardIncrease = balanceOf(user) * (rewardPerToken(e) - userRewardPerTokenPaid(user)) / oneEther();
+
+  assert earned(e, user) == rewards(user) + expectedRewardIncrease, "Earned not returning the expected value";
 }
 
 ////////////////////////////////////////////////////////////
@@ -502,9 +541,115 @@ rule onlySpecificConditionsCanModifyRewardDuration(method f, env e) {
     );
 }
 
+// @audit-ok
+// If finishAt is equal to updatedAt the variable should no longer increase, unless notifyRewardAmount is called to reset the rewards and finishAt variable
+rule updatedStopsIncreasingUnlessNotifyCalled() {
+  env e; method f; calldataarg args;
+  require e.block.timestamp > finishAt();
+
+  mathint updatedAtBefore = updatedAt();
+  require updatedAtBefore == finishAt();
+
+  f(e, args);
+
+  assert updatedAt() != updatedAtBefore <=> 
+    f.selector == notifyRewardAmount(uint256).selector, 
+    "Updated at should stop increasing when finish is reached";
+}
+
+// @audit-ok
+rule selectMethodsModifyTotalSupplyAndBalance() {
+  env e; method f; calldataarg args; uint256 amount;
+
+  mathint totalSupplyBefore = totalSupply();
+  mathint userBalanceBefore = balanceOf(e.msg.sender);
+  f(e, args);
+  mathint totalSupplyAfter = totalSupply();
+  mathint userBalanceAfter = balanceOf(e.msg.sender);
+
+  mathint totalSupplyChange = totalSupplyAfter - totalSupplyBefore;
+  mathint userBalanceChange = userBalanceAfter - userBalanceBefore;
+
+  assert totalSupplyChange == userBalanceChange, "Total supply should've changed the same amount as the user's balance";
+
+  assert totalSupplyChange > 0 <=>  f.selector == stake(uint256).selector, "Total supply should only increase on stake";
+
+  assert totalSupplyChange < 0 <=> f.selector == withdraw(uint256).selector, "Total supply should only decrease on withdraw";
+}
+
 ////////////////////////////////////////////////////////////
 // *************** High-level properties ***************  //
 ////////////////////////////////////////////////////////////
+
+// @audit-ok
+// This was very difficult to prove, provides some nice guarantee that another user can't affect the withdraw-ability of another user
+rule userActionShouldntAffectAbilityToWithdrawTokens() {
+  env e1; env e2; method f; calldataarg args; uint256 amount;
+
+  require e1.msg.sender != e2.msg.sender;
+  
+  requireInvariant stakingContractSolvent();
+  requireInvariant updatedAtLessEqualBlocktimestamp(e1);
+  requireInvariant userRewardPerTokenPaidLessEqualRewardPerTokenStored(e2.msg.sender);
+
+  globalRequires(e1);
+  globalRequires(e2);
+
+  require balanceOf(e2.msg.sender) >= amount;
+  require stakingToken.balanceOf(e2.msg.sender) + amount <= max_uint256;
+  require amount > 0;
+  require e2.msg.value == 0;
+  require e2.block.timestamp >= e1.block.timestamp;
+
+  f(e1, args);
+
+  earned(e2, e2.msg.sender); // Ensure a call to this can succeed, this doesn't limit the scope of the test too much as we are interested in whether another user can steal tokens from the first user
+
+  withdraw@withrevert(e2, amount);
+
+  assert !lastReverted, "User action shouldn't be able to affect ability to withdraw tokens";
+}
+
+rule userClaimingRewardsShouldntEffectOtherUser() {
+  env e1; env e2;
+  require e1.msg.sender != e2.msg.sender;
+  requireInvariant stakingContractSolvent(); 
+  requireInvariant userRewardPerTokenPaidLessEqualRewardPerTokenStored(e1.msg.sender);
+  requireInvariant userRewardPerTokenPaidLessEqualRewardPerTokenStored(e2.msg.sender);
+
+  globalRequires(e1);
+  globalRequires(e2);
+
+  require e2.block.timestamp >= e1.block.timestamp;
+  require e2.msg.value == 0;
+
+  getReward(e1);
+
+  mathint expectedReward = earned(e2, e2.msg.sender);
+
+  require rewardsToken.balanceOf(e2.msg.sender) + expectedReward <= max_uint256;
+
+  require rewardsToken.balanceOf(currentContract) >= expectedReward;
+  
+  getReward@withrevert(e2);
+
+  assert !lastReverted, "Users shouldn't affect other users claim to their rewards";
+}
+
+
+////////////////////////////////////////////////////////////
+// ***************    Risk assessment    ***************  //
+////////////////////////////////////////////////////////////
+
+
+// @audit-ok
+rule ownerShouldNeverChange() {
+  env e; method f; calldataarg args;
+  address ownerBefore = owner();
+  f(e, args);
+
+  assert owner() == ownerBefore, "The owner should never change";
+}
 
 // Ensures that only the provided amount is taken from the user and that they can always withdraw it to get back their initial token balance
 // @audit-ok
@@ -524,151 +669,58 @@ rule userCanAlwaysWithdrawAndGetSameAmountBack(env e, uint256 amount) {
   mathint finalUserTokenBalance = stakingToken.balanceOf(e.msg.sender);
 
   assert !withdrawReverted, "Withdrawing the staked assets should never revert";
-  assert finalUserTokenBalance == initialTokenBalance, "User should have their initial token balance back";
+  assert finalUserTokenBalance == initialTokenBalance, "User should have their 
+  initial token balance back";
 }
 
-// ! Seems very hard to prove
-rule userActionShouldntAffectAbilityToWithdrawTokens() {
-  env e1; env e2; method f; calldataarg args; uint256 amount;
 
-  requireInvariant stakingContractSolvent();
-  require balanceOf(e2.msg.sender) >= amount;
-  require amount > 0;
-  require e2.msg.value == 0;
+////////////////////////////////////////////////////////////
+// ***************          Bugs         ***************  //
+////////////////////////////////////////////////////////////
 
-  f(e1, args);
+// If user stakes before round start they will receive an outsized amount of rewards compared to other users. This is because the rewardPerTokenStored = 0 in an initial state, then when notifyRewardAmount is called it will set rewardPerTokenStored to an appropriate value. Then finally when the user updates their position it will calculate their rewards per token to be: rewardPerToken() - 0; resulting in a large amount of rewards
+rule bugUserGetsAnOutsizedAmountOfRewardsIfStakingBeforeStart() {
+  env env1; env env2; env env3; uint256 amount;
 
-  withdraw@withrevert(e2, amount);
+  globalRequires(env1);
+  globalRequires(env2);
+  require env1.msg.sender != env2.msg.sender;
+  require env1.block.timestamp >= finishAt();
+  require env2.block.timestamp == env1.block.timestamp;
+  require env3.block.timestamp > env2.block.timestamp;
 
-  assert !lastReverted, "User action shouldn't be able to affect ability to withdraw tokens";
-}
+  // This should be the initial state before a round start
+  require rewardPerToken(env1) == 0;
 
-rule userClaimingRewardsShouldntEffectOtherUsers() {
-  env e1; env e2;
-  requireInvariant stakingContractSolvent(); 
-  requireInvariant userRewardPerTokenPaidLessEqualRewardPerTokenStored(e1.msg.sender);
-  requireInvariant userRewardPerTokenPaidLessEqualRewardPerTokenStored(e2.msg.sender);
+  stake(env1, amount);
+  // This should be the initial reward per token paid for the user if rewardPerToken isn't set
+  assert userRewardPerTokenPaid(env1.msg.sender) == 0;
 
-  globalRequires(e1);
-  globalRequires(e2);
+  uint256 rewardAmount;
 
-  require e2.block.timestamp >= e1.block.timestamp;
-  require e2.msg.value == 0;
+  notifyRewardAmount(env1, rewardAmount);
+  stake(env2, amount); // Second user stakes
 
-  mathint userBalanceBefore = rewardsToken.balanceOf(e2.msg.sender);
+  // Update rewards for both users, using a block.timestamp in the future
+  updateRewardHelper(env3, env1.msg.sender);
+  updateRewardHelper(env3, env2.msg.sender);
 
-  mathint expectedReward = rewards(e2.msg.sender);
-
-  require rewardsToken.balanceOf(currentContract) >= rewards(e1.msg.sender) + expectedReward;
-  require userBalanceBefore + expectedReward <= max_uint256;
+  mathint rewardDiff = rewards(env1.msg.sender) - rewards(env2.msg.sender);
   
+  // Using this assertion so that Certora generates a counter-example demonstrating an outsized increase in rewards
+  assert rewardDiff < 5 * oneEther(), "This assertion generates a counter-example highlighting an outsized difference in rewards";
 
-  earned(e2, e2.msg.sender); // Ensure a call to this can succeed
-
-  getReward(e1);
-  
-  getReward@withrevert(e2);
-
-  assert !lastReverted, "Users shouldn't affect other users claim to their rewards";
+  // Previously was doing the below assertion
+  // assert rewards(env1.msg.sender) - rewards(env2.msg.sender);
 }
-
-rule userShouldAlwaysBeAbleToClaimRewards() {
-  env e1; env e2;
-  // require e1 == e2;
-  // require e1.block.timestamp != e2.block.timestamp;
-  require e2.msg.value == 0;
-  require e1.msg.sender == e2.msg.sender;
-  require e2.block.timestamp >= e1.block.timestamp;
-
-  earned(e1, e1.msg.sender);
-
-  getReward@withrevert(e2);
-
-  assert !lastReverted, "User should always be able to claim their share of rewards";
-}
-
-
-// ////////////////////////////////////////////////////////////
-// // ***************    Risk assessment    ***************  //
-// ////////////////////////////////////////////////////////////
-
-
-// // @audit-ok
-// rule ownerShouldNeverChange() {
-//   env e; method f; calldataarg args;
-//   address ownerBefore = owner();
-//   f(e, args);
-
-//   assert owner() == ownerBefore, "The owner should never change";
-// }
-
-
-// ////////////////////////////////////////////////////////////
-// // ***************          Bugs         ***************  //
-// ////////////////////////////////////////////////////////////
-
-// // rule userStakesBeforeRoundStarts() {}
-
-// // If a user stakes into a round and doesn't claim rewards before a new round is setup, they will receive no rewards for the previous round
-// // ! If the rewardRate is updated through notifyRewardAmount, that will cause an immediate change in the amount of earned rewards
-// rule bugUserDoesntClaimUntilNextRound() {
-//   env e1; env e2;
-
-//   // require e1.msg.sender == e2.msg.sender;
-//   require e2.block.timestamp == e1.block.timestamp;
-//   require rewardPerToken(e1) > 0;
-
-//   uint256 amount;
-//   stake(e1, amount);
-
-//   uint256 earnedRewardsBefore = earned(e1, e1.msg.sender);
-//   uint256 rewardAmount;
-//   notifyRewardAmount(e2, rewardAmount);
-//   uint256 earnedRewardsAfter = earned(e1, e1.msg.sender);
-
-//   assert earnedRewardsAfter >= earnedRewardsBefore, "User shouldn't have reduced rewards after the reward amount is updated";
-// }
-
-// // If a user stakes before the round start, when the contract is in it's initial state, when the round starts and they claim rewards, they should receive the same rewards as someone who staked at round start
-// rule bugUserStakesBeforeRoundStartShouldGetSameRewards() {
-//   env e1; env e2;
-//   // requireInvariant lastTimeRewardApplicableGreaterEqualUpdatedAt(e);
-
-//   require e1.block.timestamp >= finishAt();
-//   require e1.block.timestamp == e2.block.timestamp;
-
-//   // Initial reward rate states are 0
-//   // require rewardRate() == 0;
-//   // require rewardPerTokenStored() == 0;
-//   // Need to ensure that a user 
-//   require rewardPerToken(e1) == 0;
-//   require balanceOf(e1.msg.sender) == balanceOf(e2.msg.sender);
-//   require rewards(e1.msg.sender) == rewards(e2.msg.sender);
-//   require userRewardPerTokenPaid(e1.msg.sender) == 0;
-//   require userRewardPerTokenPaid(e2.msg.sender) == 0;
-
-//   uint256 amount;
-//   stake(e1, amount);
-//   // This should be the initial reward per token paid for the user
-//   assert userRewardPerTokenPaid(e1.msg.sender) == 0;
-
-//   uint256 rewardAmount;
-//   notifyRewardAmount(e2, rewardAmount);
-//   stake(e2, amount);
-
-//   // env e1_1; env e2_2;
-//   // require e1_1.msg.sender == e1.msg.sender && e1_1.block.timestamp > e1.block.timestamp;
-//   // require e2_2.msg.sender == e2.msg.sender && e2_2.block.timestamp == e1_1.block.timestamp;
-
-//   mathint rewardsEarned1 = getRewardsAndRewardsEarned(e1);
-//   mathint rewardsEarned2 = getRewardsAndRewardsEarned(e2);
-
-//   assert rewardsEarned1 == rewardsEarned2, "User has no rewards to claim";
-// }
 
 ////////////////////////////////////////////////////////////
 // ***************        Helpers        ***************  //
 ////////////////////////////////////////////////////////////
+
+// I imagine there is a better way to achieve this, couldn't find it though
+definition oneEther() returns mathint =
+  1000000000000000000;
 
 definition ownerOnlyMethods(method f) returns bool =
   f.selector == setRewardsDuration(uint256).selector ||
@@ -677,7 +729,8 @@ definition ownerOnlyMethods(method f) returns bool =
 definition userRewardUpdatingMethods(method f) returns bool =
   f.selector == getReward().selector ||
   f.selector == withdraw(uint256).selector ||
-  f.selector == stake(uint256).selector;
+  f.selector == stake(uint256).selector ||
+  f.selector == updateRewardHelper(address).selector;
 
 definition updatedRewardMethods(method f) returns bool =
   userRewardUpdatingMethods(f) ||

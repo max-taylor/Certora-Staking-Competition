@@ -28,6 +28,7 @@ contract StakingRewards {
     mapping(address => uint) public balanceOf;
 
     constructor(address _stakingToken, address _rewardToken) {
+        // @audit-ok
         owner = msg.sender;
         stakingToken = IERC20(_stakingToken);
         rewardsToken = IERC20(_rewardToken);
@@ -38,15 +39,14 @@ contract StakingRewards {
         _;
     }
 
-    uint256 readme;
-
+    // @audit-ok
     modifier updateReward(address _account) {
-        uint256 readme2 = readme;
-
+        // @audit-ok
         rewardPerTokenStored = rewardPerToken();
         updatedAt = lastTimeRewardApplicable();
 
         if (_account != address(0)) {
+            // @audit-ok
             rewards[_account] = earned(_account);
             userRewardPerTokenPaid[_account] = rewardPerTokenStored;
         }
@@ -64,11 +64,7 @@ contract StakingRewards {
             return rewardPerTokenStored;
         }
 
-        // uint256 rightSide = (lastTimeRewardApplicable() - updatedAt) * 1e18;
-        // uint256 total = rewardRate * rightSide;
-
         return
-            // @audit rounds to 0 if totalSupply large enough
             rewardPerTokenStored +
             (rewardRate * (lastTimeRewardApplicable() - updatedAt) * 1e18) /
             totalSupply;
@@ -76,6 +72,7 @@ contract StakingRewards {
 
     function stake(uint _amount) external updateReward(msg.sender) {
         require(_amount > 0, "amount = 0");
+        // @audit-ok
         stakingToken.transferFrom(msg.sender, address(this), _amount);
         balanceOf[msg.sender] += _amount;
         totalSupply += _amount;
@@ -83,6 +80,7 @@ contract StakingRewards {
 
     function withdraw(uint _amount) external updateReward(msg.sender) {
         require(_amount > 0, "amount = 0");
+        // @audit-ok
         balanceOf[msg.sender] -= _amount;
         totalSupply -= _amount;
         stakingToken.transfer(msg.sender, _amount);
@@ -95,12 +93,8 @@ contract StakingRewards {
             rewards[_account];
     }
 
-    //     uint256 loadme;
-
-    // function getReward() external {
-    //     uint256 loadme2 = loadme;
-
     function getReward() external updateReward(msg.sender) {
+        // @audit-ok
         uint reward = rewards[msg.sender];
         if (reward > 0) {
             rewards[msg.sender] = 0;
@@ -111,17 +105,16 @@ contract StakingRewards {
     // @audit-ok
     function setRewardsDuration(uint _duration) external onlyOwner {
         require(finishAt < block.timestamp, "reward duration not finished");
-        // @audit no max value limit
         duration = _duration;
     }
 
     function notifyRewardAmount(
         uint _amount
     ) external onlyOwner updateReward(address(0)) {
+        // @audit-ok
         if (block.timestamp >= finishAt) {
             rewardRate = _amount / duration;
         } else {
-            // @audit this can overflow uint256
             uint remainingRewards = (finishAt - block.timestamp) * rewardRate;
             rewardRate = (_amount + remainingRewards) / duration;
         }
@@ -133,6 +126,7 @@ contract StakingRewards {
             "reward amount > balance"
         );
 
+        // @audit-ok
         finishAt = block.timestamp + duration;
         updatedAt = block.timestamp;
     }
