@@ -59,11 +59,13 @@ contract StakingRewards {
         return _min(finishAt, block.timestamp);
     }
 
+    // @audit-ok
     function rewardPerToken() public view returns (uint) {
         if (totalSupply == 0) {
             return rewardPerTokenStored;
         }
 
+        // @audit-ok
         return
             rewardPerTokenStored +
             (rewardRate * (lastTimeRewardApplicable() - updatedAt) * 1e18) /
@@ -87,6 +89,7 @@ contract StakingRewards {
     }
 
     function earned(address _account) public view returns (uint) {
+        // @audit-ok
         return
             ((balanceOf[_account] *
                 (rewardPerToken() - userRewardPerTokenPaid[_account])) / 1e18) +

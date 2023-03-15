@@ -33,10 +33,9 @@ methods{
     getNotifyUpdatedRewardRate(uint256) returns uint256
 }
 
-// TODO: remove
-// https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable/blob/master/certora/specs/GovernorBase.spec
-
-//  *** Ghosts
+////////////////////////////////////////////////////////////
+//  ***************        Ghosts        ***************  //
+////////////////////////////////////////////////////////////
 
 ghost mathint ghostSumOfBalances {
 	init_state axiom ghostSumOfBalances == 0 ;
@@ -560,19 +559,23 @@ rule updatedStopsIncreasingUnlessNotifyCalled() {
 // @audit-ok
 rule selectMethodsModifyTotalSupplyAndBalance() {
   env e; method f; calldataarg args; uint256 amount;
+  globalRequires(e);
 
   mathint totalSupplyBefore = totalSupply();
   mathint userBalanceBefore = balanceOf(e.msg.sender);
-  f(e, args);
-  mathint totalSupplyAfter = totalSupply();
-  mathint userBalanceAfter = balanceOf(e.msg.sender);
+  mathint userStakingBalanceBefore = stakingToken.balanceOf(e.msg.sender);
 
-  mathint totalSupplyChange = totalSupplyAfter - totalSupplyBefore;
-  mathint userBalanceChange = userBalanceAfter - userBalanceBefore;
+  f(e, args);
+
+  mathint totalSupplyChange = totalSupply() - totalSupplyBefore;
+  mathint userBalanceChange = balanceOf(e.msg.sender) - userBalanceBefore;
+  mathint userStakingTokenBalanceChange = stakingToken.balanceOf(e.msg.sender) - userStakingBalanceBefore;
 
   assert totalSupplyChange == userBalanceChange, "Total supply should've changed the same amount as the user's balance";
 
-  assert totalSupplyChange > 0 <=>  f.selector == stake(uint256).selector, "Total supply should only increase on stake";
+  assert userStakingTokenBalanceChange == totalSupplyChange * -1, "User's staking token balance change should be the direct inverse of the total supply change";
+
+  assert totalSupplyChange > 0 <=> f.selector == stake(uint256).selector, "Total supply should only increase on stake";
 
   assert totalSupplyChange < 0 <=> f.selector == withdraw(uint256).selector, "Total supply should only decrease on withdraw";
 }
@@ -755,3 +758,9 @@ function getRewardsAndRewardsEarned(env e) returns mathint {
 
   return balanceAfter - balanceBefore;
 }
+
+
+////////////////////////////////////////////////////////////
+// ***************    Graveyard :(       ***************  //
+////////////////////////////////////////////////////////////
+// Couldn't get these methods to work
