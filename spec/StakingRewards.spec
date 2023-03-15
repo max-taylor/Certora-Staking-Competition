@@ -186,9 +186,10 @@ rule lastTimeRewardApplicableResult(env e) {
     result == e.block.timestamp;
 }
 
-rule notifyRewardAmountShouldRevertIfConditions() {
+// @audit-ok
+rule notifyRewardAmountShouldRevertIffConditions() {
   env e;
-  // shouldAlwaysRevertCallingOwnerMethodsFromNonOwner is checking the admin only methods
+  // rule - shouldAlwaysRevertCallingOwnerMethodsFromNonOwner is checking the admin only methods
   require e.msg.sender == owner();
   requireInvariant finishAtGreaterEqualThanBlocktimestamp(e);
   requireInvariant finishAtZeroThenUpdatedAtZero();
@@ -199,21 +200,11 @@ rule notifyRewardAmountShouldRevertIfConditions() {
   uint256 amount;
   uint256 updatedRewardRate = getNotifyUpdatedRewardRate(e, amount);
 
-  // Ensure this method call passes, so we can assert against the relevant reverting conditions
-  rewardPerToken@withrevert(e);
-  require !lastReverted;
+  rewardPerToken(e);
 
   notifyRewardAmount@withrevert(e, amount);
   bool reverted = lastReverted;
-
-  // // If the updated reward rate will be 0 it should revert
-  // assert updatedRewardRate == 0 => reverted;
-  // // If the contract doesn't have enough balance to handle the increase in rewards it should revert
-  // assert updatedRewardRate * duration() > rewardsToken.balanceOf(currentContract) => reverted;
-
-  // require rewardPerToken@withRevert; !lastReverted;
   
-  // ! Note this assertion results in an overflow in rewardPerToken, block.timestamp is set extremely high, or rewardRate is
   assert reverted <=> (
     updatedRewardRate == 0 ||
     updatedRewardRate * duration() > rewardsToken.balanceOf(currentContract)
@@ -261,7 +252,26 @@ rule stakeShouldRevertIffConditions() {
 
 // ** Withdraw
 
-// rule withdrawShouldRevertWhenTryingToWithdrawGreaterThanT
+// @audit-ok
+rule withdrawRevertIffConditions() {
+  env e; uint256 amount;
+
+  require stakingToken.balanceOf(currentContract) >= amount;
+  require stakingToken.balanceOf(e.msg.sender) + amount <= max_uint256;
+  require totalSupply() >= amount;
+
+  earned@withrevert(e, e.msg.sender);
+  require !lastReverted;
+
+  mathint userBalance = balanceOf(e.msg.sender);
+
+  withdraw@withrevert(e, amount);
+
+  assert lastReverted <=> (
+    userBalance < amount ||
+    amount == 0
+  ), "Withdrawing more than the user's balance should revert";
+}
 
 // rule updatedAtOnlyUpdatedBySelectMethods() {}
 
@@ -369,6 +379,21 @@ rule claimingRewardsShouldResetState() {
   assert rewardsToken.balanceOf(e.msg.sender) - tokenBalanceBefore == expectedRewards;
 }
 
+// @audit-ok
+rule rewardPerTokenUpdatedAtUpdatedBySelectMethods() {
+  env e; method f; calldataarg args;
+
+  mathint rewardPerTokenStoredBefore = rewardPerTokenStored();
+  mathint updatedAtBefore = updatedAt();
+
+  f(e, args);
+
+  assert (
+    rewardPerTokenStoredBefore != rewardPerTokenStored() || 
+    updatedAtBefore != updatedAt()
+  ) => updatedRewardMethods(f);
+}
+
 ////////////////////////////////////////////////////////////
 //  *************** Variable Transitions ***************  //
 ////////////////////////////////////////////////////////////
@@ -426,14 +451,14 @@ rule onlySpecificConditionsCanModifyRewardDuration(method f, env e) {
 
 // Ensures that only the provided amount is taken from the user and that they can always withdraw it to get back their initial token balance
 // @audit-ok
-rule onlyAmountStakedForUserAndCanAlwaysWithdraw(env e, uint256 amount) {
+rule userCanAlwaysWithdrawAndGetSameAmountBack(env e, uint256 amount) {
   globalRequires(e);
 
   mathint initialTokenBalance = stakingToken.balanceOf(e.msg.sender);
   stake(e, amount);
   mathint afterStakingBalance = stakingToken.balanceOf(e.msg.sender);
 
-  assert initialTokenBalance - afterStakingBalance == amount, "The amount should be taken from the user";
+  assert initialTokenBalance - afterStakingBalance == amount, "Only the amount should be taken from the user";
 
   withdraw@withrevert(e, amount);
 
@@ -445,22 +470,52 @@ rule onlyAmountStakedForUserAndCanAlwaysWithdraw(env e, uint256 amount) {
   assert finalUserTokenBalance == initialTokenBalance, "User should have their initial token balance back";
 }
 
+
+rule userClaimingRewardsShouldntEffectOtherUsers() {
+  env e1; env e2;
+  globalRequires(e1);
+  globalRequires(e2);
+
+  getReward(e1);
+
+  getReward@withrevert(e2);
+
+  assert !lastReverted, "Users shouldn't affect other users claim to their rewards";
+}
+
+
+rule userShouldAlwaysBeAbleToClaimRewards() {
+  env e1; env e2;
+  require e2.msg.sender == e1.msg.sender;
+
+  earned(e1, e1.msg.sender);
+
+  getReward@withrevert(e2);
+
+  assert !lastReverted, "User should always be able to claim their share of rewards";
+}
+
+
 ////////////////////////////////////////////////////////////
 // ***************    Risk assessment    ***************  //
 ////////////////////////////////////////////////////////////
 
+
 // @audit-ok
-rule userShouldOnlyBeAbleToWithdrawTheirBalance(env e) {
-  uint256 userBalance = balanceOf(e.msg.sender);
+rule ownerShouldNeverChange() {
+  env e; method f; calldataarg args;
+  address ownerBefore = owner();
+  f(e, args);
 
-  withdraw(e, userBalance);
-
-  uint256 amount;
-
-  withdraw@withrevert(e, amount);
-
-  assert lastReverted, "Withdrawing more than the user's balance should revert";
+  assert owner() == ownerBefore, "The owner should never change";
 }
+
+
+////////////////////////////////////////////////////////////
+// ***************          Bugs         ***************  //
+////////////////////////////////////////////////////////////
+
+
 
 // rule userShouldAlwaysBeAbleToClaimRewards(env e) {
 //   getReward@withrevert(e);
@@ -468,7 +523,9 @@ rule userShouldOnlyBeAbleToWithdrawTheirBalance(env e) {
 //   assert !lastReverted, "User should always be able to claim their rewards";
 // }
 
-// *** HELPERS
+////////////////////////////////////////////////////////////
+// ***************        Helpers        ***************  //
+////////////////////////////////////////////////////////////
 
 definition ownerOnlyMethods(method f) returns bool =
   f.selector == setRewardsDuration(uint256).selector ||
@@ -478,6 +535,10 @@ definition userRewardUpdatingMethods(method f) returns bool =
   f.selector == getReward().selector ||
   f.selector == withdraw(uint256).selector ||
   f.selector == stake(uint256).selector;
+
+definition updatedRewardMethods(method f) returns bool =
+  userRewardUpdatingMethods(f) ||
+  f.selector == notifyRewardAmount(uint256).selector;
 
 function globalRequires(env e) {
   require e.msg.sender != 0;

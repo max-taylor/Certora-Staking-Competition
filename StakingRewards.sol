@@ -38,7 +38,11 @@ contract StakingRewards {
         _;
     }
 
+    uint256 readme;
+
     modifier updateReward(address _account) {
+        uint256 readme2 = readme;
+
         rewardPerTokenStored = rewardPerToken();
         updatedAt = lastTimeRewardApplicable();
 
