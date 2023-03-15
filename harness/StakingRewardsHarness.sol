@@ -13,8 +13,6 @@ contract StakingRewardsHarness is StakingRewards {
         rewardsToken.transfer(user, amount);
     }
 
-    function updateRewardHelper(address user) external updateReward(user) {}
-
     /**
      * This method returns what the updated reward rate will be if calling the notifyRewardRate method with the supplied amount parameter.
      * @param _amount The amount to calculate the new reward rate with

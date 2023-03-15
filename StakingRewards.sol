@@ -50,6 +50,7 @@ contract StakingRewards {
         _;
     }
 
+    // @audit-ok
     function lastTimeRewardApplicable() public view returns (uint) {
         return _min(finishAt, block.timestamp);
     }
@@ -101,14 +102,13 @@ contract StakingRewards {
     // @audit-ok
     function setRewardsDuration(uint _duration) external onlyOwner {
         require(finishAt < block.timestamp, "reward duration not finished");
+        // @audit no max value limit
         duration = _duration;
     }
 
     function notifyRewardAmount(
         uint _amount
     ) external onlyOwner updateReward(address(0)) {
-        // @audit If this isn't checked correctly, the remaining rewards in the else block will be abandoned
-
         // @audit rewardRate == 0 if duration is too large
         if (block.timestamp >= finishAt) {
             rewardRate = _amount / duration;
@@ -118,6 +118,7 @@ contract StakingRewards {
             rewardRate = (_amount + remainingRewards) / duration;
         }
 
+        // @audit-ok
         require(rewardRate > 0, "reward rate = 0");
         require(
             rewardRate * duration <= rewardsToken.balanceOf(address(this)),
@@ -128,7 +129,7 @@ contract StakingRewards {
         updatedAt = block.timestamp;
     }
 
-    // @audit There will likely be a bug around this, create some bad implementations and flip them
+    // @audit-info Good bug contract to test
     function _min(uint x, uint y) private pure returns (uint) {
         return x <= y ? x : y;
     }
