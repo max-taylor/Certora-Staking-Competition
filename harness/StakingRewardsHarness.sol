@@ -14,4 +14,19 @@ contract StakingRewardsHarness is StakingRewards {
     }
 
     function updateRewardHelper(address user) external updateReward(user) {}
+
+    /**
+     * This method returns what the updated reward rate will be if calling the notifyRewardRate method with the supplied amount parameter.
+     * @param _amount The amount to calculate the new reward rate with
+     */
+    function getNotifyUpdatedRewardRate(
+        uint _amount
+    ) external view returns (uint256 updatedRewardRate) {
+        if (block.timestamp >= finishAt) {
+            updatedRewardRate = _amount / duration;
+        } else {
+            uint remainingRewards = (finishAt - block.timestamp) * rewardRate;
+            updatedRewardRate = (_amount + remainingRewards) / duration;
+        }
+    }
 }

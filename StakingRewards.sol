@@ -59,7 +59,11 @@ contract StakingRewards {
             return rewardPerTokenStored;
         }
 
+        // uint256 rightSide = (lastTimeRewardApplicable() - updatedAt) * 1e18;
+        // uint256 total = rewardRate * rightSide;
+
         return
+            // @audit rounds to 0 if totalSupply large enough
             rewardPerTokenStored +
             (rewardRate * (lastTimeRewardApplicable() - updatedAt) * 1e18) /
             totalSupply;
@@ -104,9 +108,12 @@ contract StakingRewards {
         uint _amount
     ) external onlyOwner updateReward(address(0)) {
         // @audit If this isn't checked correctly, the remaining rewards in the else block will be abandoned
+
+        // @audit rewardRate == 0 if duration is too large
         if (block.timestamp >= finishAt) {
             rewardRate = _amount / duration;
         } else {
+            // @audit this can overflow uint256
             uint remainingRewards = (finishAt - block.timestamp) * rewardRate;
             rewardRate = (_amount + remainingRewards) / duration;
         }

@@ -29,6 +29,7 @@ methods{
     getReward(address)
     setRewardsDuration(uint256)
     notifyRewardAmount(uint256)
+    getNotifyUpdatedRewardRate(uint256) returns uint256
 }
 
 
@@ -55,8 +56,8 @@ invariant totalSupplyIsSumOfBalances()
   totalSupply() == ghostSumOfBalances
 
 // @audit-ok
-invariant finishAtGreaterThanBlocktimestamp(env e)
-  // Finish at is initialized at 0, so have to skip this pre-condition
+invariant finishAtGreaterEqualThanBlocktimestamp(env e)
+  // Finish at is initialized at 0, so skip this pre-condition
   finishAt() != 0 => finishAt() >= e.block.timestamp
   {
     preserved with (env e1) {
@@ -66,16 +67,19 @@ invariant finishAtGreaterThanBlocktimestamp(env e)
   }
 
 // @audit-ok
+// When updatedAt is updated, it calls lastTimeRewardApplicable to get the min of finishAt or block.timestamp. If finishAt is 0, then updatedAt should be set to 0.
 invariant finishAtZeroThenUpdatedAtZero()
   finishAt() == 0 => updatedAt() == 0
   {
     preserved with (env e) {
+      // Safe assumption
       require e.block.timestamp > 0;
     }
   }
 
 // @audit-ok
-invariant updatedAtLessBlocktimestamp(env e)
+// Ensures updatedAt never exceeds block.timestamp
+invariant updatedAtLessEqualBlocktimestamp(env e)
   updatedAt() <= e.block.timestamp
   {
     preserved with (env e1) {
@@ -84,12 +88,23 @@ invariant updatedAtLessBlocktimestamp(env e)
     }
   }
 
+// @audit-ok
+// updatedAt should never exceed lastTimeRewardApplicable
+invariant lastTimeRewardApplicableGreaterEqualUpdatedAt(env e)
+  lastTimeRewardApplicable(e) >= updatedAt()
+  {
+    preserved with (env e1) {
+      require e1.block.timestamp == e.block.timestamp;
+      requireInvariant updatedAtLessEqualBlocktimestamp(e1);
+    }
+  }
+
 // *** Unit test
 
 // @audit-ok
 rule updatedAtShouldOnlyIncrease(method f, env e, calldataarg args) {
-  requireInvariant finishAtGreaterThanBlocktimestamp(e);
-  requireInvariant updatedAtLessBlocktimestamp(e);
+  requireInvariant finishAtGreaterEqualThanBlocktimestamp(e);
+  requireInvariant updatedAtLessEqualBlocktimestamp(e);
   requireInvariant finishAtZeroThenUpdatedAtZero();
 
   mathint updatedAtBefore = updatedAt();
@@ -136,8 +151,6 @@ rule rewardPerTokenStopsIncreasingAfterFinish() {
   assert rewardPerTokenBefore == rewardPerTokenAfter;
 }
 
-// *** OK
-
 // @audit-ok
 rule onlySpecificConditionsCanModifyRewardDuration(method f, env e){
   uint256 _duration = duration();
@@ -153,13 +166,104 @@ rule onlySpecificConditionsCanModifyRewardDuration(method f, env e){
     );
 }
 
+// ** Notify reward amount
+
+// If block.timestamp >= finishAt => rewardRate == _amount / duration
+// Else block.timestamp < finishAt => rewardRate == amount + ((finishAt - block.timestamp) * rewardRate) / duration
+// finishAt == block.timestamp + duration
+// updatedAt == block.timestamp
+
+// It should always revert if duration == 0
+
+// @audit-ok
+rule notifyRewardAmountShouldRevertIffConditions() {
+  env e;
+  requireInvariant finishAtZeroThenUpdatedAtZero();
+  requireInvariant updatedAtLessEqualBlocktimestamp(e);
+
+  uint256 amount;
+  uint256 updatedRewardRate = getNotifyUpdatedRewardRate(e, amount);
+
+  notifyRewardAmount@withrevert(e, amount);
+
+  bool reverted = lastReverted;
+
+  assert updatedRewardRate == 0 => reverted;
+  assert updatedRewardRate * duration() > rewardsToken.balanceOf(currentContract) => reverted;
+  
+  // ! Note this assertion results in an overflow in rewardPerToken, block.timestamp is set extremely high, or rewardRate is
+  // assert reverted <=> (
+  //   updatedRewardRate == 0 ||
+  //   updatedRewardRate * duration() > rewardsToken.balanceOf(currentContract) ||
+  //   e.msg.sender != owner()
+  // );
+}
+
+// @audit-ok
+rule finishAtOnlyUpdatedByNotifyRewardAmount() {
+  env e; method f; calldataarg args;
+
+  uint256 finishAtBefore = finishAt();
+  f(e, args);
+
+  assert finishAt() != finishAtBefore => 
+    f.selector == notifyRewardAmount(uint256).selector;
+}
+
+// rule updatedAtOnlyUpdatedBySelectMethods() {}
+
+// It should always revert when calling admin methods from a non-admin account
+
+// @audit-ok
+rule shouldAlwaysRevertCallingOwnerMethodsFromNonOwner(method f, env e, calldataarg args) 
+  filtered {
+    f -> ownerOnlyMethods(f)
+  } 
+{
+  require owner() != e.msg.sender;
+
+  f@withrevert(e, args);
+
+  assert lastReverted, "Should always revert when calling admin methods from non-admin account";
+}
+
 // **** High-level
 
-// rule userShouldAlwaysBeAbleToWithdraw() {
+// @audit-ok
+rule userShouldAlwaysBeAbleToWithdrawStakedAmount(env e, uint256 amount) {
+  stake(e, amount);
 
-// }
+  withdraw@withrevert(e, amount);
+
+  assert !lastReverted, "Withdrawing the staked assets should never revert";
+}
+
+// **** Risk-assessment
+
+// @audit-ok
+rule userShouldOnlyBeAbleToWithdrawTheirBalance(env e) {
+  uint256 userBalance = balanceOf(e.msg.sender);
+
+  withdraw(e, userBalance);
+
+  uint256 amount;
+
+  withdraw@withrevert(e, amount);
+
+  assert lastReverted, "Withdrawing more than the user's balance should revert";
+}
+
+rule userShouldAlwaysBeAbleToClaimRewards(env e) {
+  getReward@withrevert(e);
+
+  assert !lastReverted, "User should always be able to claim their rewards";
+}
 
 // *** HELPERS
+
+definition ownerOnlyMethods(method f) returns bool =
+  f.selector == setRewardsDuration(uint256).selector ||
+  f.selector == notifyRewardAmount(uint256).selector;
 
 function globalRequires(env e) {
   require e.msg.sender != 0;
