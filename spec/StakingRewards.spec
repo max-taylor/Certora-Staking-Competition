@@ -34,7 +34,7 @@ methods{
 }
 
 ////////////////////////////////////////////////////////////
-//  ***************        Ghosts        ***************  //
+//  ***************    Ghosts/hooks      ***************  //
 ////////////////////////////////////////////////////////////
 
 ghost mathint ghostSumOfBalances {
@@ -643,40 +643,65 @@ rule shouldAlwaysRevertCallingOwnerMethodsFromNonOwner(method f, env e, calldata
 // ***************          Bugs         ***************  //
 ////////////////////////////////////////////////////////////
 
-// If user stakes before round start they will receive an outsized amount of rewards compared to other users. This is because the rewardPerTokenStored = 0 in an initial state, then when notifyRewardAmount is called it will set rewardPerTokenStored to an appropriate value. Then finally when the user updates their position it will calculate their rewards per token to be: rewardPerToken() - 0; resulting in a large amount of rewards
+// If user stakes before the first round start they will receive an outsized amount of rewards compared to other users. This is because rewardPerToken() returns 0 in the initial state, this value will then be stored as the users rewardPerTokenPaid. Then when the round is started by calling notifyRewardAmount it will set rewardPerTokenStored to an appropriate value. Then when the user updates their position it will calculate their rewards per token to be: rewardPerToken() - 0; resulting in an outsized amount of rewards
+// Perhaps it should prevent users from staking until the rewardPerToken() > 0
 rule bugUserGetsAnOutsizedAmountOfRewardsIfStakingBeforeStart() {
-  env env1; env env2; env env3; uint256 amount;
+  env user1Env; env user2Env; env updateRewardsEnv; env notifyRewardAmountEnv; uint256 amount;
 
-  globalRequires(env1);
-  globalRequires(env2);
-  require env1.msg.sender != env2.msg.sender;
-  require env1.block.timestamp >= finishAt();
-  require env2.block.timestamp == env1.block.timestamp;
-  require env3.block.timestamp > env2.block.timestamp;
+  globalRequires(user1Env);
+  globalRequires(user2Env);
+  require user1Env.msg.sender != user2Env.msg.sender;
+  require user1Env.block.timestamp >= finishAt();
+  // Can give both .envs the same block.timestamp, it doesn't change much about the test and we want them to have staked for the same length
+  require user2Env.block.timestamp == user1Env.block.timestamp;
+  // We need the notifyRewardEnv to be less, so that when the second user stakes some time has elapsed so it stores their userRewardPerTokenPaid to be greater than 0
+  require user1Env.block.timestamp > notifyRewardAmountEnv.block.timestamp;
+  // Then we want to use this environment to get rewards for the users, so use a block.timestamp in the future
+  require updateRewardsEnv.block.timestamp > user2Env.block.timestamp;
 
-  // This should be the initial state before a round start
-  require rewardPerToken(env1) == 0;
+  // Ensure their reward claimable state is the same
+  require balanceOf(user1Env.msg.sender) == 0;
+  require balanceOf(user2Env.msg.sender) == 0;
+  require rewards(user1Env.msg.sender) == 0;
+  require rewards(user2Env.msg.sender) == 0;
 
-  stake(env1, amount);
-  // This should be the initial reward per token paid for the user if rewardPerToken isn't set
-  assert userRewardPerTokenPaid(env1.msg.sender) == 0;
+  // Should return 0 if the user hasn't added to the contract before
+  require userRewardPerTokenPaid(user2Env.msg.sender) == 0;
+
+  // This should be the initial state before the first round start
+  require rewardPerToken(user1Env) == 0;
+
+  // User 1 stakes
+  stake(user1Env, amount);
+
+  // This should be the initial reward per token paid for the user
+  assert userRewardPerTokenPaid(user1Env.msg.sender) == 0;
 
   uint256 rewardAmount;
 
-  notifyRewardAmount(env1, rewardAmount);
-  stake(env2, amount); // Second user stakes
+  // Initialize the reward state
+  notifyRewardAmount(notifyRewardAmountEnv, rewardAmount);
+
+  stake(user2Env, amount); // Second user stakes the same amount
+
+  // Cache the storage, so we can get the rewards for both users using the same state
+  storage cacheStorage = lastStorage;
 
   // Update rewards for both users, using a block.timestamp in the future
-  updateRewardHelper(env3, env1.msg.sender);
-  updateRewardHelper(env3, env2.msg.sender);
+  updateRewardHelper(updateRewardsEnv, user1Env.msg.sender);
+  mathint user1Rewards = rewards(user1Env.msg.sender);
 
-  mathint rewardDiff = rewards(env1.msg.sender) - rewards(env2.msg.sender);
-  
+  // Reset state to before user1 calls
+  updateRewardHelper(updateRewardsEnv, user2Env.msg.sender) at cacheStorage;
+  mathint user2Rewards = rewards(user2Env.msg.sender);
+
+  mathint rewardDiff = user1Rewards - user2Rewards;
+
   // Using this assertion so that Certora generates a counter-example demonstrating an outsized increase in rewards
   assert rewardDiff < 5 * oneEther(), "This assertion generates a counter-example highlighting an outsized difference in rewards";
 
   // Previously was doing the below assertion
-  // assert rewards(env1.msg.sender) - rewards(env2.msg.sender);
+  // assert rewardDiff == 0, "Reward amount should be the same";;
 }
 
 ////////////////////////////////////////////////////////////
